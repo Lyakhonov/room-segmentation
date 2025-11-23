@@ -2,6 +2,7 @@ import os
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
+from io import BytesIO
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
@@ -14,6 +15,8 @@ from sqlalchemy.orm import declarative_base
 from pydantic import BaseModel, EmailStr
 from PIL import Image, ImageDraw
 import uvicorn
+from minio import Minio
+from minio.error import S3Error
 
 # ==========================================
 # CONFIGURATION
@@ -27,15 +30,31 @@ DATABASE_URL = os.environ.get(
     "postgresql+asyncpg://postgres:postgres@localhost:5433/room_segmentation"
 )
 
-UPLOAD_DIR = "uploads"
-RESULT_DIR = "results"
-os.makedirs(UPLOAD_DIR, exist_ok=True)
-os.makedirs(RESULT_DIR, exist_ok=True)
+
+MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
+MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
+MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "admin123456")
+MINIO_BUCKET = "room-segmentation"
+
+minio_client = Minio(
+    MINIO_ENDPOINT,
+    access_key=MINIO_ACCESS_KEY,
+    secret_key=MINIO_SECRET_KEY,
+    secure=False
+)
+
+try:
+    if not minio_client.bucket_exists(MINIO_BUCKET):
+        minio_client.make_bucket(MINIO_BUCKET)
+except S3Error as err:
+    print("MinIO error:", err)
+
 
 # ==========================================
 # DATABASE
 # ==========================================
 Base = declarative_base()
+
 
 class User(Base):
     __tablename__ = "users"
@@ -45,6 +64,7 @@ class User(Base):
     password = Column(String(512), nullable=False)
     created_at = Column(DateTime(timezone=True), default=datetime.now(timezone.utc))
 
+
 class ImageRecord(Base):
     __tablename__ = "images"
     id = Column(Integer, primary_key=True, index=True)
@@ -53,7 +73,6 @@ class ImageRecord(Base):
     result_filename = Column(String(512))
     status = Column(String(32), default="processing")  # processing | done | failed
     created_at = Column(DateTime(timezone=True), default=datetime.now(timezone.utc))
-    segmentation_meta = Column(Text)
 
 engine = create_async_engine(DATABASE_URL, echo=False, future=True)
 AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
@@ -159,9 +178,10 @@ async def create_tables():
     return {"status": "ok"}
 
 # ---------- IMAGE UPLOAD ----------
-def simulate_segmentation(input_path: str, output_path: str):
-    img = Image.open(input_path).convert("RGB")
+def simulate_segmentation_bytes(input_bytes: bytes) -> bytes:
+    img = Image.open(BytesIO(input_bytes)).convert("RGBA")
     w, h = img.size
+
     mask = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     draw = ImageDraw.Draw(mask)
 
@@ -171,12 +191,19 @@ def simulate_segmentation(input_path: str, output_path: str):
     draw.rectangle([int(w*0.1), int(h*0.45), int(w*0.22), int(h*0.65)], fill=(0,0,255,160))  # door
     draw.rectangle([int(w*0.55), int(h*0.18), int(w*0.78), int(h*0.36)], fill=(255,255,0,160))  # window
 
-    overlaid = Image.alpha_composite(img.convert("RGBA"), mask)
-    overlaid.save(output_path)
+    result_img = Image.alpha_composite(img, mask)
 
-async def run_segmentation(input_path: str, output_path: str):
+    output = BytesIO()
+    result_img.save(output, format="PNG")
+    output.seek(0)
+
+    return output.read()
+
+
+async def run_segmentation_bytes(input_bytes: bytes) -> bytes:
     loop = asyncio.get_event_loop()
-    await loop.run_in_executor(None, simulate_segmentation, input_path, output_path)
+    return await loop.run_in_executor(None, simulate_segmentation_bytes, input_bytes)
+
 
 @app.post("/images/upload")
 async def upload_image(
@@ -187,24 +214,55 @@ async def upload_image(
     if not file.content_type.startswith("image/"):
         raise HTTPException(400, "Only image files supported")
 
+    # читаем байты изображения
+    file_bytes = await file.read()
+
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%f")
     filename = f"{user.id}_{timestamp}_{file.filename}"
-    path = os.path.join(UPLOAD_DIR, filename)
-    with open(path, "wb") as f:
-        f.write(await file.read())
+    object_name = f"uploads/{filename}"
 
-    record = ImageRecord(owner_id=user.id, filename=path)
+    # 1) Загружаем оригинал в MinIO
+    minio_client.put_object(
+        MINIO_BUCKET,
+        object_name,
+        data=BytesIO(file_bytes),
+        length=len(file_bytes),
+        content_type=file.content_type
+    )
+
+    # 2) Создаём запись в БД
+    record = ImageRecord(owner_id=user.id, filename=object_name)
     db.add(record)
     await db.commit()
     await db.refresh(record)
 
-    result_path = os.path.join(RESULT_DIR, f"result_{record.id}.png")
-    await run_segmentation(path, result_path)
+    # 3) Выполняем сегментацию в памяти
+    try:
+        result_bytes = await run_segmentation_bytes(file_bytes)
 
-    record.result_filename = result_path
-    record.status = "done"
-    await db.commit()
-    return {"id": record.id, "status": record.status}
+        result_filename = f"results/result_{record.id}.png"
+
+        # 4) Загружаем сегментированную картинку в MinIO
+        minio_client.put_object(
+            MINIO_BUCKET,
+            result_filename,
+            data=BytesIO(result_bytes),
+            length=len(result_bytes),
+            content_type="image/png"
+        )
+
+        record.result_filename = result_filename
+        record.status = "done"
+        await db.commit()
+
+    except Exception as e:
+        record.status = "failed"
+        await db.commit()
+        raise HTTPException(500, f"Segmentation failed: {e}")
+
+    return {"id": record.id, "status": "done"}
+
+
 
 @app.get("/images/{image_id}/result")
 async def get_result(image_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
@@ -214,9 +272,64 @@ async def get_result(image_id: int, user: User = Depends(get_current_user), db: 
         raise HTTPException(404, "Not found")
     if record.owner_id != user.id:
         raise HTTPException(403, "Forbidden")
+
     if record.status != "done":
-        return JSONResponse({"status": record.status}, status_code=202)
-    return FileResponse(record.result_filename, media_type="image/png")
+        return {"status": record.status}
+
+    try:
+        signed_url = minio_client.presigned_get_object(
+            MINIO_BUCKET,
+            record.result_filename,
+            expires=timedelta(hours=1)
+        )
+    except Exception as e:
+        raise HTTPException(500, f"Could not generate signed URL: {e}")
+
+    return {"status": "done", "url": signed_url}
+
+from datetime import timedelta
+
+@app.get("/images/history")
+async def get_history(
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db)
+):
+    query = await db.execute(
+        select(ImageRecord).where(ImageRecord.owner_id == user.id)
+    )
+    records = query.scalars().all()
+
+    history = []
+
+    for r in records:
+
+        # Подписанная ссылка на оригинал
+        original_url = minio_client.presigned_get_object(
+            MINIO_BUCKET,
+            r.filename,
+            expires=timedelta(hours=1)
+        )
+
+        # Подписанная ссылка на результат (если есть)
+        result_url = None
+        if r.result_filename:
+            result_url = minio_client.presigned_get_object(
+                MINIO_BUCKET,
+                r.result_filename,
+                expires=timedelta(hours=1)
+            )
+
+        history.append({
+            "id": r.id,
+            "created_at": r.created_at.isoformat(),
+            "status": r.status,
+            "original_url": original_url,
+            "result_url": result_url
+        })
+
+    return history
+
+
 
 @app.get("/")
 async def root():

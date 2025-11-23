@@ -1,3 +1,5 @@
+version: "3.9"
+
 services:
   db:
     image: postgres:16
@@ -11,6 +13,7 @@ services:
       - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+
   minio:
     image: minio/minio:latest
     container_name: minio
@@ -19,11 +22,44 @@ services:
     environment:
       MINIO_ROOT_USER: admin
       MINIO_ROOT_PASSWORD: admin123456
+      # 🔥 ВАЖНО — сказать MinIO, какой URL использовать во внешних ссылках
+      MINIO_SERVER_URL: http://localhost:9000
     ports:
-      - "9000:9000"   # S3 API
-      - "9001:9001"   # Web UI
+      - "9000:9000"
+      - "9001:9001"
     volumes:
       - minio_data:/data
+
+  backend:
+    build: .
+    container_name: smartcards-backend
+    depends_on:
+      - db
+      - minio
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/room_segmentation
+      - SECRET_KEY=CHANGE_ME_PLEASE
+
+      # Backend должен обращаться к MinIO через тот же адрес,
+      # который виден фронтенду → localhost:9000
+      - MINIO_ENDPOINT=localhost:9000
+      - MINIO_ACCESS_KEY=admin
+      - MINIO_SECRET_KEY=admin123456
+      - MINIO_BUCKET=room-segmentation
+
+    # Позволяет backend обращаться к MinIO как к localhost
+    extra_hosts:
+      - "localhost:host-gateway"
+
+    command: >
+      bash -c "chmod +x ./wait-for-db.sh &&
+               ./wait-for-db.sh db &&
+               alembic upgrade head &&
+               python -m app"
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
 
 volumes:
   postgres_data:

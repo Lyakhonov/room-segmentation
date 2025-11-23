@@ -6,17 +6,19 @@ from io import BytesIO
 
 from fastapi import FastAPI, Depends, HTTPException, UploadFile, File
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from fastapi.responses import JSONResponse, FileResponse
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text, select
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
-from sqlalchemy.orm import declarative_base
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from pydantic import BaseModel, EmailStr
 from PIL import Image, ImageDraw
 import uvicorn
 from minio import Minio
 from minio.error import S3Error
+
+from appp.core.database import Base, get_db, engine
+from appp.models.user import User
+from appp.models.imageRecord import ImageRecord
 
 # ==========================================
 # CONFIGURATION
@@ -36,6 +38,7 @@ MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
 MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "admin123456")
 MINIO_BUCKET = "room-segmentation"
 
+
 minio_client = Minio(
     MINIO_ENDPOINT,
     access_key=MINIO_ACCESS_KEY,
@@ -49,37 +52,6 @@ try:
 except S3Error as err:
     print("MinIO error:", err)
 
-
-# ==========================================
-# DATABASE
-# ==========================================
-Base = declarative_base()
-
-
-class User(Base):
-    __tablename__ = "users"
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String(256), unique=True, index=True, nullable=False)
-    full_name = Column(String(128))
-    password = Column(String(512), nullable=False)
-    created_at = Column(DateTime(timezone=True), default=datetime.now(timezone.utc))
-
-
-class ImageRecord(Base):
-    __tablename__ = "images"
-    id = Column(Integer, primary_key=True, index=True)
-    owner_id = Column(Integer, ForeignKey("users.id"), nullable=False)
-    filename = Column(String(512), nullable=False)
-    result_filename = Column(String(512))
-    status = Column(String(32), default="processing")  # processing | done | failed
-    created_at = Column(DateTime(timezone=True), default=datetime.now(timezone.utc))
-
-engine = create_async_engine(DATABASE_URL, echo=False, future=True)
-AsyncSessionLocal = async_sessionmaker(engine, class_=AsyncSession, expire_on_commit=False)
-
-async def get_db():
-    async with AsyncSessionLocal() as session:
-        yield session
 
 # ==========================================
 # AUTH
@@ -170,12 +142,6 @@ async def login_user(form_data: OAuth2PasswordRequestForm = Depends(), db: Async
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
-# ---------- CREATE TABLES ----------
-@app.post("/create_tables")
-async def create_tables():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    return {"status": "ok"}
 
 # ---------- IMAGE UPLOAD ----------
 def simulate_segmentation_bytes(input_bytes: bytes) -> bytes:

@@ -32,7 +32,7 @@ services:
 
   backend:
     build: .
-    container_name: smartcards-backend
+    container_name: room_segmentation
     depends_on:
       - db
       - minio

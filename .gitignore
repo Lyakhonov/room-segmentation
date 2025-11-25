@@ -86,4 +86,12 @@ test_data/
 *.log
 logs/
 
-
+# Не игнорируем .pt файлы - они в LFS
+# !*.pt
+# !*.pth
+# Но игнорируем временные файлы тренировок
+training_outputs/
+runs/
+wandb/
+mlruns/
+checkpoints/

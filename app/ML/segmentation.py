@@ -4,6 +4,7 @@ from ultralytics import YOLO
 
 # Загружаем модель
 room_model = YOLO("app/ML/best.pt")
+door_window_model = YOLO("app/ML/best_door_window.pt")
 
 COLOR_MAP = {
     "floor": (0, 255, 0),
@@ -44,11 +45,11 @@ def run_segmentation(input_bytes: bytes) -> bytes:
 
     # YOLO предсказание
     room_res = room_model(img)[0]
-    # dw_res = door_window_model(img)[0]
+    dw_res = door_window_model(img)[0]
 
     # Наложение масок
     # masked = apply_segmentation_masks(img, [room_res, dw_res])
-    masked = apply_segmentation_masks(img, [room_res])
+    masked = apply_segmentation_masks(img, [room_res, dw_res])
 
     success, output_bytes = cv2.imencode(".png", masked)
 

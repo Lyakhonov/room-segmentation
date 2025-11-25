@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   db:
     image: postgres:16
@@ -11,6 +9,11 @@ services:
       POSTGRES_DB: room_segmentation
     ports:
       - "5433:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
     volumes:
       - postgres_data:/var/lib/postgresql/data
 
@@ -52,9 +55,7 @@ services:
       - "localhost:host-gateway"
 
     command: >
-      bash -c "chmod +x ./wait-for-db.sh &&
-               ./wait-for-db.sh db &&
-               alembic upgrade head &&
+      bash -c "alembic upgrade head &&
                python -m app"
     ports:
       - "8000:8000"

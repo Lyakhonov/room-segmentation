@@ -8,6 +8,6 @@ class UserCreate(BaseModel):
     full_name: Optional[str] = None
 
 class UserResponse(BaseModel):
-    id: int
+    id: str
     email: EmailStr
     full_name: Optional[str] = None

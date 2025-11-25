@@ -37,8 +37,10 @@ services:
     build: .
     container_name: room_segmentation
     depends_on:
-      - db
-      - minio
+      db:
+        condition: service_healthy  # Ждем пока БД станет здоровой
+      minio:
+        condition: service_started
     environment:
       - DATABASE_URL=postgresql+asyncpg://postgres:postgres@db:5432/room_segmentation
       - SECRET_KEY=CHANGE_ME_PLEASE

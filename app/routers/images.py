@@ -9,6 +9,7 @@ from PIL import Image, ImageDraw
 
 from app.core.database import get_db
 from app.core.security import get_current_user
+from app.core.utils import generate_uuid
 from app.models.user import User
 from app.models.imageRecord import ImageRecord
 from app.core.config import minio_client, MINIO_BUCKET
@@ -70,7 +71,10 @@ async def upload_image(
     )
 
     # 2) Создаём запись в БД
-    record = ImageRecord(owner_id=user.id, filename=object_name)
+    record = ImageRecord(
+        id=generate_uuid(),
+        owner_id=user.id,
+        filename=object_name)
     db.add(record)
     await db.commit()
     await db.refresh(record)

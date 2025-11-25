@@ -1,7 +1,7 @@
 services:
   db:
     image: postgres:16
-    container_name: room_segmentation_db
+    container_name: db
     restart: always
     environment:
       POSTGRES_USER: postgres
@@ -56,7 +56,7 @@ services:
 
     command: >
       bash -c "alembic upgrade head &&
-               python -m app"
+               python -m app.main"
     ports:
       - "8000:8000"
     volumes:

@@ -12,7 +12,7 @@ config = context.config
 
 # Добавляем родительскую директорию в путь
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from appp.core.database import Base
+from app.core.database import Base
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
@@ -23,8 +23,8 @@ if config.config_file_name is not None:
 # for 'autogenerate' support
 # from myapp import mymodel
 # target_metadata = mymodel.Base.metadata
-from appp.models.user import User
-from appp.models.imageRecord import ImageRecord
+from app.models.user import User
+from app.models.imageRecord import ImageRecord
 target_metadata = Base.metadata
 
 # other values from the config, defined by the needs of env.py,

@@ -1,6 +1,6 @@
 from sqlalchemy import Column, ForeignKey, Integer, String, DateTime
 from datetime import datetime, timezone
-from appp.core.database import Base
+from app.core.database import Base
 
 class ImageRecord(Base):
     __tablename__ = "images"

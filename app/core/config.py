@@ -8,7 +8,7 @@ class Settings:
     ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24
     DATABASE_URL = os.getenv(
         "DATABASE_URL",
-        "postgresql+asyncpg://postgres:postgres@db:5433/room_segmentation"
+        "postgresql+asyncpg://postgres:postgres@db:5432/room_segmentation"
     )
 
 

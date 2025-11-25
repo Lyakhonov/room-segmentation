@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from PIL import Image, ImageDraw
 
+from app.ML.segmentation import run_segmentation
 from app.core.database import get_db
 from app.core.security import get_current_user
 from app.core.utils import generate_uuid
@@ -16,32 +17,6 @@ from app.core.config import minio_client, MINIO_BUCKET
 
 
 router = APIRouter()
-
-def simulate_segmentation_bytes(input_bytes: bytes) -> bytes:
-    img = Image.open(BytesIO(input_bytes)).convert("RGBA")
-    w, h = img.size
-
-    mask = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-    draw = ImageDraw.Draw(mask)
-
-    draw.rectangle([0, int(h*0.65), w, h], fill=(255,0,0,120))  # floor
-    draw.rectangle([0, int(h*0.15), int(w*0.25), int(h*0.65)], fill=(0,255,0,120))  # left wall
-    draw.rectangle([int(w*0.75), int(h*0.15), w, int(h*0.65)], fill=(0,255,0,120))  # right wall
-    draw.rectangle([int(w*0.1), int(h*0.45), int(w*0.22), int(h*0.65)], fill=(0,0,255,160))  # door
-    draw.rectangle([int(w*0.55), int(h*0.18), int(w*0.78), int(h*0.36)], fill=(255,255,0,160))  # window
-
-    result_img = Image.alpha_composite(img, mask)
-
-    output = BytesIO()
-    result_img.save(output, format="PNG")
-    output.seek(0)
-
-    return output.read()
-
-
-async def run_segmentation_bytes(input_bytes: bytes) -> bytes:
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, simulate_segmentation_bytes, input_bytes)
 
 
 @router.post("/upload")
@@ -63,7 +38,6 @@ async def upload_image(
     # 1) Загружаем оригинал в MinIO
     minio_client.put_object(
         MINIO_BUCKET,
-
         object_name,
         data=BytesIO(file_bytes),
         length=len(file_bytes),
@@ -81,7 +55,8 @@ async def upload_image(
 
     # 3) Выполняем сегментацию в памяти
     try:
-        result_bytes = await run_segmentation_bytes(file_bytes)
+        loop = asyncio.get_event_loop()
+        result_bytes = await loop.run_in_executor(None, run_segmentation, file_bytes)
 
         result_filename = f"results/result_{record.id}.png"
 

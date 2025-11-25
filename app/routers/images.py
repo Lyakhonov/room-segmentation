@@ -83,7 +83,7 @@ async def upload_image(
 
 
 @router.get("/{image_id}/result")
-async def get_result(image_id: int, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
+async def get_result(image_id: str, user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(ImageRecord).where(ImageRecord.id == image_id))
     record = result.scalars().first()
     if not record:
